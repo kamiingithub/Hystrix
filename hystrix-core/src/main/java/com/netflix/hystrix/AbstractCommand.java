@@ -366,6 +366,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
         //doOnCompleted handler already did all of the SUCCESS work
         //doOnError handler already did all of the FAILURE/TIMEOUT/REJECTION/BAD_REQUEST work
+        // 处理command终止清理的回调
         final Action0 terminateCommandCleanup = new Action0() {
 
             @Override
@@ -379,6 +380,7 @@ import java.util.concurrent.atomic.AtomicReference;
         };
 
         //mark the command as CANCELLED and store the latency (in addition to standard cleanup)
+        // 处理command清理的回调 todo
         final Action0 unsubscribeCommandCleanup = new Action0() {
             @Override
             public void call() {
@@ -410,9 +412,11 @@ import java.util.concurrent.atomic.AtomicReference;
             }
         };
 
+        // 执行command入口
         final Func0<Observable<R>> applyHystrixSemantics = new Func0<Observable<R>>() {
             @Override
             public Observable<R> call() {
+                // 不再订阅了就返回不发送数据的 Observable
                 if (commandState.get().equals(CommandState.UNSUBSCRIBED)) {
                     return Observable.never();
                 }
@@ -455,6 +459,7 @@ import java.util.concurrent.atomic.AtomicReference;
             @Override
             public Observable<R> call() {
                  /* this is a stateful object so can only be used once */
+                // 校验命令的状态，保证其只执行一次
                 if (!commandState.compareAndSet(CommandState.NOT_STARTED, CommandState.OBSERVABLE_CHAIN_CREATED)) {
                     IllegalStateException ex = new IllegalStateException("This instance can only be executed once. Please instantiate a new instance.");
                     //TODO make a new error type for this
@@ -470,28 +475,39 @@ import java.util.concurrent.atomic.AtomicReference;
                     }
                 }
 
+                // 是否开启了请求缓存
                 final boolean requestCacheEnabled = isRequestCachingEnabled();
+                // 获取缓存 key
                 final String cacheKey = getCacheKey();
 
                 /* try from cache first */
+                // 开启缓存后，尝试从缓存中取
                 if (requestCacheEnabled) {
                     HystrixCommandResponseFromCache<R> fromCache = (HystrixCommandResponseFromCache<R>) requestCache.get(cacheKey);
                     if (fromCache != null) {
                         isResponseFromCache = true;
+                        // 缓存击中时的处理
                         return handleRequestCacheHitAndEmitValues(fromCache, _cmd);
                     }
                 }
 
+                // 没有开启请求缓存时，就执行正常的逻辑
                 Observable<R> hystrixObservable =
+                        // 创建了我们需要的 Observable
+                        // 执行command逻辑
                         Observable.defer(applyHystrixSemantics)
+                                // 发送前会先走一遍 hook, 默认都是空实现的
                                 .map(wrapWithAllOnNextHooks);
 
                 Observable<R> afterCache;
 
                 // put in cache
+                // 走缓存
                 if (requestCacheEnabled && cacheKey != null) {
                     // wrap it for caching
+                    // 把上面封装好的observable放入缓存
                     HystrixCachedObservable<R> toCache = HystrixCachedObservable.from(hystrixObservable, _cmd);
+                    // 再从缓存里娄出来
                     HystrixCommandResponseFromCache<R> fromCache = (HystrixCommandResponseFromCache<R>) requestCache.putIfAbsent(cacheKey, toCache);
                     if (fromCache != null) {
                         // another thread beat us so we'll use the cached value instead
@@ -507,22 +523,35 @@ import java.util.concurrent.atomic.AtomicReference;
                 }
 
                 return afterCache
+                        // 终止时的操作
                         .doOnTerminate(terminateCommandCleanup)     // perform cleanup once (either on normal terminal state (this line), or unsubscribe (next line))
+                        // 取消订阅时的操作
                         .doOnUnsubscribe(unsubscribeCommandCleanup) // perform cleanup once
+                        // 完成时的操作
                         .doOnCompleted(fireOnCompletedHook);
             }
         });
     }
 
+    /**
+     * 执行command
+     * @param _cmd
+     * @return
+     */
     private Observable<R> applyHystrixSemantics(final AbstractCommand<R> _cmd) {
         // mark that we're starting execution on the ExecutionHook
         // if this hook throws an exception, then a fast-fail occurs with no fallback.  No state is left inconsistent
+        // 标记开始执行的 hook
+        // 如果 hook 内抛异常了，会fast-fail且没有 fallback 处理
         executionHook.onStart(_cmd);
 
         /* determine if we're allowed to execute */
+        // 断路器未打开
         if (circuitBreaker.attemptExecution()) {
+            // 获取semaphore容器
             final TryableSemaphore executionSemaphore = getExecutionSemaphore();
             final AtomicBoolean semaphoreHasBeenReleased = new AtomicBoolean(false);
+            // 释放信号量
             final Action0 singleSemaphoreRelease = new Action0() {
                 @Override
                 public void call() {
@@ -531,29 +560,35 @@ import java.util.concurrent.atomic.AtomicReference;
                     }
                 }
             };
-
+            // 异常处理
             final Action1<Throwable> markExceptionThrown = new Action1<Throwable>() {
                 @Override
                 public void call(Throwable t) {
+                    // hook
                     eventNotifier.markEvent(HystrixEventType.EXCEPTION_THROWN, commandKey);
                 }
             };
 
+            // 尝试获取信号量
             if (executionSemaphore.tryAcquire()) {
                 try {
                     /* used to track userThreadExecutionTime */
+                    // 记录command的生命周期
                     executionResult = executionResult.setInvocationStartTime(System.currentTimeMillis());
+                    // 执行command
                     return executeCommandAndObserve(_cmd)
-                            .doOnError(markExceptionThrown)
-                            .doOnTerminate(singleSemaphoreRelease)
-                            .doOnUnsubscribe(singleSemaphoreRelease);
+                            .doOnError(markExceptionThrown) // 异常处理
+                            .doOnTerminate(singleSemaphoreRelease) // 释放信号量
+                            .doOnUnsubscribe(singleSemaphoreRelease); // 释放信号量
                 } catch (RuntimeException e) {
                     return Observable.error(e);
                 }
             } else {
+                // 处理SemaphoreReject
                 return handleSemaphoreRejectionViaFallback();
             }
         } else {
+            // 处理短路
             return handleShortCircuitViaFallback();
         }
     }
@@ -566,25 +601,31 @@ import java.util.concurrent.atomic.AtomicReference;
      * @return R
      */
     private Observable<R> executeCommandAndObserve(final AbstractCommand<R> _cmd) {
+        // 获取当前上下文
         final HystrixRequestContext currentRequestContext = HystrixRequestContext.getContextForCurrentThread();
 
+        // 发送数据时的 Action 响应
         final Action1<R> markEmits = new Action1<R>() {
             @Override
             public void call(R r) {
+                // 如果 onNext 时需要上报时
                 if (shouldOutputOnNextEvents()) {
                     executionResult = executionResult.addEvent(HystrixEventType.EMIT);
                     eventNotifier.markEvent(HystrixEventType.EMIT, commandKey);
                 }
+                // 若是HystrixCommand
                 if (commandIsScalar()) {
                     long latency = System.currentTimeMillis() - executionResult.getStartTimestamp();
                     eventNotifier.markEvent(HystrixEventType.SUCCESS, commandKey);
                     executionResult = executionResult.addEvent((int) latency, HystrixEventType.SUCCESS);
                     eventNotifier.markCommandExecution(getCommandKey(), properties.executionIsolationStrategy().get(), (int) latency, executionResult.getOrderedList());
+                    // 如果HALF_OPEN状态下command执行成功则关闭断路器
                     circuitBreaker.markSuccess();
                 }
             }
         };
 
+        // 完成
         final Action0 markOnCompleted = new Action0() {
             @Override
             public void call() {
@@ -598,6 +639,7 @@ import java.util.concurrent.atomic.AtomicReference;
             }
         };
 
+        // 失败回退处理
         final Func1<Throwable, Observable<R>> handleFallback = new Func1<Throwable, Observable<R>>() {
             @Override
             public Observable<R> call(Throwable t) {
@@ -624,6 +666,7 @@ import java.util.concurrent.atomic.AtomicReference;
             }
         };
 
+        // 设置请求上下文
         final Action1<Notification<? super R>> setRequestContext = new Action1<Notification<? super R>>() {
             @Override
             public void call(Notification<? super R> rNotification) {
@@ -632,17 +675,20 @@ import java.util.concurrent.atomic.AtomicReference;
         };
 
         Observable<R> execution;
+        // 处理超时
         if (properties.executionTimeoutEnabled().get()) {
             execution = executeCommandWithSpecifiedIsolation(_cmd)
+                    // 具有超时功能的处理器
                     .lift(new HystrixObservableTimeoutOperator<R>(_cmd));
         } else {
             execution = executeCommandWithSpecifiedIsolation(_cmd);
         }
 
-        return execution.doOnNext(markEmits)
-                .doOnCompleted(markOnCompleted)
-                .onErrorResumeNext(handleFallback)
-                .doOnEach(setRequestContext);
+        // executionObservable
+        return execution.doOnNext(markEmits) // 发送数据时的 Action 响应
+                .doOnCompleted(markOnCompleted) // 完成
+                .onErrorResumeNext(handleFallback) // 失败回退处理
+                .doOnEach(setRequestContext); // 设置请求上下文
     }
 
     private Observable<R> executeCommandWithSpecifiedIsolation(final AbstractCommand<R> _cmd) {
@@ -652,31 +698,37 @@ import java.util.concurrent.atomic.AtomicReference;
                 @Override
                 public Observable<R> call() {
                     executionResult = executionResult.setExecutionOccurred();
+                    // 命令状态->执行用户逻辑
                     if (!commandState.compareAndSet(CommandState.OBSERVABLE_CHAIN_CREATED, CommandState.USER_CODE_EXECUTED)) {
                         return Observable.error(new IllegalStateException("execution attempted while in state : " + commandState.get().name()));
                     }
 
                     metrics.markCommandStart(commandKey, threadPoolKey, ExecutionIsolationStrategy.THREAD);
 
+                    // 还没run就timeout了
                     if (isCommandTimedOut.get() == TimedOutStatus.TIMED_OUT) {
                         // the command timed out in the wrapping thread so we will return immediately
                         // and not increment any of the counters below or other such logic
                         return Observable.error(new RuntimeException("timed out before executing run()"));
                     }
+                    // 线程状态->开启
                     if (threadState.compareAndSet(ThreadState.NOT_USING_THREAD, ThreadState.STARTED)) {
                         //we have not been unsubscribed, so should proceed
                         HystrixCounters.incrementGlobalConcurrentThreads();
                         threadPool.markThreadExecution();
                         // store the command that is being run
+                        // 进队列
                         endCurrentThreadExecutingCommand = Hystrix.startCurrentThreadExecutingCommand(getCommandKey());
                         executionResult = executionResult.setExecutedInThread();
                         /**
                          * If any of these hooks throw an exception, then it appears as if the actual execution threw an error
                          */
                         try {
+                            // 三行纯钩子函数
                             executionHook.onThreadStart(_cmd);
                             executionHook.onRunStart(_cmd);
                             executionHook.onExecutionStart(_cmd);
+                            // 获取observable
                             return getUserExecutionObservable(_cmd);
                         } catch (Throwable ex) {
                             return Observable.error(ex);
@@ -898,15 +950,17 @@ import java.util.concurrent.atomic.AtomicReference;
 
     private Observable<R> handleRequestCacheHitAndEmitValues(final HystrixCommandResponseFromCache<R> fromCache, final AbstractCommand<R> _cmd) {
         try {
+            // 钩子
             executionHook.onCacheHit(this);
         } catch (Throwable hookEx) {
             logger.warn("Error calling HystrixCommandExecutionHook.onCacheHit", hookEx);
         }
-
+        // 将缓存的结果赋给当前 command
         return fromCache.toObservableWithStateCopiedInto(this)
                 .doOnTerminate(new Action0() {
                     @Override
                     public void call() {
+                        // 命令最终状态的不同进行不同处理
                         if (commandState.compareAndSet(CommandState.OBSERVABLE_CHAIN_CREATED, CommandState.TERMINAL)) {
                             cleanUpAfterResponseFromCache(false); //user code never ran
                         } else if (commandState.compareAndSet(CommandState.USER_CODE_EXECUTED, CommandState.TERMINAL)) {
@@ -917,6 +971,7 @@ import java.util.concurrent.atomic.AtomicReference;
                 .doOnUnsubscribe(new Action0() {
                     @Override
                     public void call() {
+                        // 命令最终状态的不同进行不同处理
                         if (commandState.compareAndSet(CommandState.OBSERVABLE_CHAIN_CREATED, CommandState.UNSUBSCRIBED)) {
                             cleanUpAfterResponseFromCache(false); //user code never ran
                         } else if (commandState.compareAndSet(CommandState.USER_CODE_EXECUTED, CommandState.UNSUBSCRIBED)) {
@@ -945,6 +1000,7 @@ import java.util.concurrent.atomic.AtomicReference;
 
     private void handleCommandEnd(boolean commandExecutionStarted) {
         Reference<TimerListener> tl = timeoutTimer.get();
+        // 清理timeout检查的listener
         if (tl != null) {
             tl.clear();
         }
@@ -952,11 +1008,14 @@ import java.util.concurrent.atomic.AtomicReference;
         long userThreadLatency = System.currentTimeMillis() - commandStartTimestamp;
         executionResult = executionResult.markUserThreadCompletion((int) userThreadLatency);
         if (executionResultAtTimeOfCancellation == null) {
+            // 统计当前执行中command数量
             metrics.markCommandDone(executionResult, commandKey, threadPoolKey, commandExecutionStarted);
         } else {
+            // 统计当前执行中command数量
             metrics.markCommandDone(executionResultAtTimeOfCancellation, commandKey, threadPoolKey, commandExecutionStarted);
         }
 
+        // todo 暂且还不知道有什么用
         if (endCurrentThreadExecutingCommand != null) {
             endCurrentThreadExecutingCommand.call();
         }
@@ -1252,6 +1311,7 @@ import java.util.concurrent.atomic.AtomicReference;
      * @return TryableSemaphore
      */
     protected TryableSemaphore getExecutionSemaphore() {
+        // SEMAPHORE
         if (properties.executionIsolationStrategy().get() == ExecutionIsolationStrategy.SEMAPHORE) {
             if (executionSemaphoreOverride == null) {
                 TryableSemaphore _s = executionSemaphorePerCircuit.get(commandKey.name());

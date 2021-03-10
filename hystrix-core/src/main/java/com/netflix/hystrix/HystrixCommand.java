@@ -295,10 +295,14 @@ public abstract class HystrixCommand<R> extends AbstractCommand<R> implements Hy
 
     @Override
     final protected Observable<R> getExecutionObservable() {
+        // 延迟执行，先doOnSubscribe再defer
         return Observable.defer(new Func0<Observable<R>>() {
             @Override
             public Observable<R> call() {
                 try {
+                    // just直接执行
+                    // 这里的run()就是去执行用户逻辑
+                    // HystrixCommand#run
                     return Observable.just(run());
                 } catch (Throwable ex) {
                     return Observable.error(ex);
@@ -431,6 +435,7 @@ public abstract class HystrixCommand<R> extends AbstractCommand<R> implements Hy
         };
 
         /* special handling of error states that throw immediately */
+        // 这里正常境况下是不会isDone的，只有在某些error情况下会走这
         if (f.isDone()) {
             try {
                 f.get();

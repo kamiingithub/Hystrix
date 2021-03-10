@@ -202,6 +202,7 @@ public interface HystrixCircuitBreaker {
 
         @Override
         public void markSuccess() {
+            // 如果HALF_OPEN状态下command执行成功则关闭断路器
             if (status.compareAndSet(Status.HALF_OPEN, Status.CLOSED)) {
                 //This thread wins the race to close the circuit - it resets the stream to start it over from 0
                 metrics.resetStream();
@@ -254,24 +255,32 @@ public interface HystrixCircuitBreaker {
         }
 
         private boolean isAfterSleepWindow() {
+            // 断路器打开时间
             final long circuitOpenTime = circuitOpened.get();
+            // now
             final long currentTime = System.currentTimeMillis();
+            // 配置的断路器睡眠窗口时间
             final long sleepWindowTime = properties.circuitBreakerSleepWindowInMilliseconds().get();
+            // 判断是否已过睡眠窗口
             return currentTime > circuitOpenTime + sleepWindowTime;
         }
 
         @Override
         public boolean attemptExecution() {
+            // 配置永久打开断路器
             if (properties.circuitBreakerForceOpen().get()) {
                 return false;
             }
+            // 配置永久关闭断路器
             if (properties.circuitBreakerForceClosed().get()) {
                 return true;
             }
+            // 断路器打开时间 为-1则说明断路器未开启
             if (circuitOpened.get() == -1) {
                 return true;
             } else {
                 if (isAfterSleepWindow()) {
+                    // 控制只有第一个能打开HALF_OPEN
                     if (status.compareAndSet(Status.OPEN, Status.HALF_OPEN)) {
                         //only the first request after sleep window should execute
                         return true;
