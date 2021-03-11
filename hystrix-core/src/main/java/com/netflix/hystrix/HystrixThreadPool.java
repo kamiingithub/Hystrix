@@ -169,13 +169,15 @@ public interface HystrixThreadPool {
         private final int queueSize;
 
         public HystrixThreadPoolDefault(HystrixThreadPoolKey threadPoolKey, HystrixThreadPoolProperties.Setter propertiesDefaults) {
+            // 获取配置
             this.properties = HystrixPropertiesFactory.getThreadPoolProperties(threadPoolKey, propertiesDefaults);
             HystrixConcurrencyStrategy concurrencyStrategy = HystrixPlugins.getInstance().getConcurrencyStrategy();
             this.queueSize = properties.maxQueueSize().get();
 
             this.metrics = HystrixThreadPoolMetrics.getInstance(threadPoolKey,
-                    concurrencyStrategy.getThreadPool(threadPoolKey, properties),
+                    concurrencyStrategy.getThreadPool(threadPoolKey, properties), // 获取线程池
                     properties);
+            // 从上面里拿线程池
             this.threadPool = this.metrics.getThreadPool();
             this.queue = this.threadPool.getQueue();
 
@@ -202,18 +204,21 @@ public interface HystrixThreadPool {
 
         @Override
         public Scheduler getScheduler(Func0<Boolean> shouldInterruptThread) {
+            // 读取配置 动态扩容线程数
             touchConfig();
             return new HystrixContextScheduler(HystrixPlugins.getInstance().getConcurrencyStrategy(), this, shouldInterruptThread);
         }
 
         // allow us to change things via fast-properties by setting it each time
         private void touchConfig() {
+            // 动态
             final int dynamicCoreSize = properties.coreSize().get();
             final int configuredMaximumSize = properties.maximumSize().get();
             int dynamicMaximumSize = properties.actualMaximumSize();
             final boolean allowSizesToDiverge = properties.getAllowMaximumSizeToDivergeFromCoreSize().get();
             boolean maxTooLow = false;
 
+            // 允许动态扩容
             if (allowSizesToDiverge && configuredMaximumSize < dynamicCoreSize) {
                 //if user sets maximum < core (or defaults get us there), we need to maintain invariant of core <= maximum
                 dynamicMaximumSize = dynamicCoreSize;
@@ -259,13 +264,17 @@ public interface HystrixThreadPool {
          * <p>
          * If a SynchronousQueue implementation is used (<code>maxQueueSize</code> <= 0), it always returns 0 as the size so this would always return true.
          */
+        // 判断队列是否已满
         @Override
         public boolean isQueueSpaceAvailable() {
             if (queueSize <= 0) {
                 // we don't have a queue so we won't look for space but instead
                 // let the thread-pool reject or not
+                // 如果配置的 maxQueueSize  <=0 ，默认情况下是-1
+                // queue就永远不会满
                 return true;
             } else {
+                // 当前queue大小 < queueSizeRejectionThreshold 则true
                 return threadPool.getQueue().size() < properties.queueSizeRejectionThreshold().get();
             }
         }

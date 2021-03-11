@@ -86,6 +86,7 @@ public class HystrixContextScheduler extends Scheduler {
             return worker.isUnsubscribed();
         }
 
+
         @Override
         public Subscription schedule(Action0 action, long delayTime, TimeUnit unit) {
             if (threadPool != null) {
@@ -96,13 +97,16 @@ public class HystrixContextScheduler extends Scheduler {
             return worker.schedule(new HystrixContexSchedulerAction(concurrencyStrategy, action), delayTime, unit);
         }
 
+        // worker调度到这里
         @Override
         public Subscription schedule(Action0 action) {
             if (threadPool != null) {
+                // 判断队列是否已满
                 if (!threadPool.isQueueSpaceAvailable()) {
                     throw new RejectedExecutionException("Rejected command because thread-pool queueSize is at rejection threshold.");
                 }
             }
+            // 队列未满，调度执行
             return worker.schedule(new HystrixContexSchedulerAction(concurrencyStrategy, action));
         }
 
@@ -168,7 +172,12 @@ public class HystrixContextScheduler extends Scheduler {
             subscription.add(sa);
             sa.addParent(subscription);
 
+            /**
+             * 把包有真正逻辑的action提交到线程池 核心逻辑
+             * @see HystrixContexSchedulerAction#HystrixContexSchedulerAction
+             */
             ThreadPoolExecutor executor = (ThreadPoolExecutor) threadPool.getExecutor();
+            // 这里线程池满的话会从juc抛出 RejectedExecutionException
             FutureTask<?> f = (FutureTask<?>) executor.submit(sa);
             sa.add(new FutureCompleterWithConfigurableInterrupt(f, shouldInterruptThread, executor));
 

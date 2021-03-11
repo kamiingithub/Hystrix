@@ -259,7 +259,7 @@ public interface HystrixCircuitBreaker {
             final long circuitOpenTime = circuitOpened.get();
             // now
             final long currentTime = System.currentTimeMillis();
-            // 配置的断路器睡眠窗口时间
+            // 配置的断路器睡眠窗口时间(默认5s)
             final long sleepWindowTime = properties.circuitBreakerSleepWindowInMilliseconds().get();
             // 判断是否已过睡眠窗口
             return currentTime > circuitOpenTime + sleepWindowTime;
@@ -279,6 +279,7 @@ public interface HystrixCircuitBreaker {
             if (circuitOpened.get() == -1) {
                 return true;
             } else {
+                // 默认5s
                 if (isAfterSleepWindow()) {
                     // 控制只有第一个能打开HALF_OPEN
                     if (status.compareAndSet(Status.OPEN, Status.HALF_OPEN)) {

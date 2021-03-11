@@ -18,6 +18,11 @@ public class InternMap<K, V> {
         this.valueConstructor = valueConstructor;
     }
 
+    /**
+     * 有则获取，无则创建
+     * @param key
+     * @return
+     */
     public V interned(K key) {
         V existingKey = storage.get(key);
         V newKey = null;

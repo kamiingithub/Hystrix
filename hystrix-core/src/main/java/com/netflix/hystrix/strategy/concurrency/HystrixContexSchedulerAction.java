@@ -40,6 +40,12 @@ public class HystrixContexSchedulerAction implements Action0 {
         this(HystrixPlugins.getInstance().getConcurrencyStrategy(), action);
     }
 
+    /**
+     * 从提交到线程池的调度任务中来的
+     * @see HystrixContextScheduler.ThreadPoolWorker#schedule(rx.functions.Action0)
+     * @param concurrencyStrategy
+     * @param action
+     */
     public HystrixContexSchedulerAction(final HystrixConcurrencyStrategy concurrencyStrategy, Action0 action) {
         this.actual = action;
         this.parentThreadState = HystrixRequestContext.getContextForCurrentThread();
@@ -53,6 +59,7 @@ public class HystrixContexSchedulerAction implements Action0 {
                     // set the state of this thread to that of its parent
                     HystrixRequestContext.setContextOnCurrentThread(parentThreadState);
                     // execute actual Action0 with the state of the parent
+                    // 这里去执行真正的command逻辑
                     actual.call();
                     return null;
                 } finally {

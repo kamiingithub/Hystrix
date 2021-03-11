@@ -88,6 +88,7 @@ public class HystrixTimer {
      * @return reference to the TimerListener that allows cleanup via the <code>clear()</code> method
      */
     public Reference<TimerListener> addTimerListener(final TimerListener listener) {
+        // 开启线程
         startThreadIfNeeded();
         // add the listener
 
@@ -96,6 +97,7 @@ public class HystrixTimer {
             @Override
             public void run() {
                 try {
+                    // 超时检查
                     listener.tick();
                 } catch (Exception e) {
                     logger.error("Failed while ticking TimerListener", e);
@@ -103,7 +105,14 @@ public class HystrixTimer {
             }
         };
 
-        ScheduledFuture<?> f = executor.get().getThreadPool().scheduleAtFixedRate(r, listener.getIntervalTimeInMilliseconds(), listener.getIntervalTimeInMilliseconds(), TimeUnit.MILLISECONDS);
+        // 通过juc的调度组件
+        // 调度在command执行后的intervalTimeInMilliseconds做超时检查
+        ScheduledFuture<?> f = executor.get().getThreadPool()
+                .scheduleAtFixedRate(
+                        r,
+                        listener.getIntervalTimeInMilliseconds(),
+                        listener.getIntervalTimeInMilliseconds(),
+                        TimeUnit.MILLISECONDS);
         return new TimerReference(listener, f);
     }
 
@@ -157,6 +166,7 @@ public class HystrixTimer {
                 threadFactory = new ThreadFactory() {
                     final AtomicInteger counter = new AtomicInteger();
 
+                    // 超时检查线程
                     @Override
                     public Thread newThread(Runnable r) {
                         Thread thread = new Thread(r, "HystrixTimer-" + counter.incrementAndGet());

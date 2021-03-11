@@ -98,6 +98,7 @@ public abstract class HystrixConcurrencyStrategy {
         final int dynamicCoreSize = threadPoolProperties.coreSize().get();
         final int keepAliveTime = threadPoolProperties.keepAliveTimeMinutes().get();
         final int maxQueueSize = threadPoolProperties.maxQueueSize().get();
+        // 获取queue
         final BlockingQueue<Runnable> workQueue = getBlockingQueue(maxQueueSize);
 
         if (allowMaximumSizeToDivergeFromCoreSize) {
@@ -156,6 +157,7 @@ public abstract class HystrixConcurrencyStrategy {
          * Queuing results in added latency and would only occur when the thread-pool is full at which point there are latency issues
          * and rejecting is the preferred solution.
          */
+        // <= 0则是SynchronousQueue
         if (maxQueueSize <= 0) {
             return new SynchronousQueue<Runnable>();
         } else {
